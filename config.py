@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -5,6 +6,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 
 _HTTPS_RE = re.compile(r"^https://[^\s]+$")
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,9 +36,15 @@ def load_config() -> Config:
             f"BUGGERALL_JIRA_URL must be a valid HTTPS URL, got: {jira_url!r}"
         )
 
-    return Config(
+    config = Config(
         jira_api_key=jira_api_key,
         jira_api_user=jira_api_user,
         jira_url=jira_url,
         qase_api_key=qase_api_key,
     )
+    _logger.info(
+        "Config loaded: jira_url=%s jira_api_user=%s",
+        config.jira_url,
+        config.jira_api_user,
+    )
+    return config

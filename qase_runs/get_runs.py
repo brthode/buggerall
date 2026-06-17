@@ -2,16 +2,17 @@
 
 Run with 1Password injecting the API key:
 
-    op run --env-file=.env -- uv run python main.py
+    op run --env-file=.env -- uv run python qase_runs/get_runs.py
 
 Expects BUGGERALL_QASE_API_KEY in the environment.
 """
 
+import json
 import os
 from typing import TYPE_CHECKING, Self
 
 from pydantic import BaseModel
-from qase.api_client_v1 import ApiClient, Configuration, ResultsApi, RunsApi
+from qase.api_client_v1 import ApiClient, CasesApi, Configuration, ResultsApi, RunsApi
 
 if TYPE_CHECKING:
     from qase.api_client_v1.models.run import Run
@@ -22,6 +23,7 @@ HOST = "https://api.qase.io/v1"
 
 class Failure(BaseModel):
     case_id: int | None
+    case_name: str | None = None
     status: str | int | None
     comment: str | None
     stacktrace: str | None
@@ -65,6 +67,23 @@ class QaseRuns:
             return None
         return max(entities, key=lambda run: run.id or 0)
 
+    def test_case_name(self, case_id: int) -> str | None:
+        # The generated TestCase model mis-types isManual/isToBeAutomated as int
+        # while the API returns booleans, so get_case() raises a pydantic
+        # ValidationError. Read the raw response and pull the title ourselves.
+        response = CasesApi(self._client).get_case_without_preload_content(
+            self._code, case_id
+        )
+        body: object = json.loads(response.data)
+        if not isinstance(body, dict):
+            return None
+        data: dict[str, object] = {str(k): v for k, v in body.items()}  # type: ignore[misc]  # narrowed dict items are Unknown
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return None
+        title = result.get("title")  # type: ignore[misc]  # narrowed dict value is Unknown
+        return title if isinstance(title, str) else None
+
     def _failures(self, run_id: int) -> list[Failure]:
         results = (
             ResultsApi(self._client)
@@ -74,16 +93,22 @@ class QaseRuns:
         entities = results.entities if results else None
         if not entities:
             return []
-        return [
-            Failure(
-                case_id=result.case_id,
-                status=result.status,
-                comment=result.comment,
-                stacktrace=result.stacktrace,
-                time_spent_ms=result.time_spent_ms,
+
+        failures: list[Failure] = []
+        for result in entities:
+            case_id = result.case_id
+            case_name = self.test_case_name(case_id) if case_id is not None else None
+            failures.append(
+                Failure(
+                    case_id=case_id,
+                    case_name=case_name,
+                    status=result.status,
+                    comment=result.comment,
+                    stacktrace=result.stacktrace,
+                    time_spent_ms=result.time_spent_ms,
+                )
             )
-            for result in entities
-        ]
+        return failures
 
     def latest_run_failures(self) -> RunFailures | None:
         run = self.latest_run()

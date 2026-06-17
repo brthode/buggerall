@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "A system to open Jira defects from Qase test failures"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "python-dotenv>=1.2.2",
+]
 
 [dependency-groups]
 dev = [

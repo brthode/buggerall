@@ -7,6 +7,7 @@ Run with 1Password injecting the API key:
 Expects BUGGERALL_QASE_API_KEY in the environment.
 """
 
+import json
 import os
 from typing import TYPE_CHECKING, Self
 
@@ -67,10 +68,21 @@ class QaseRuns:
         return max(entities, key=lambda run: run.id or 0)
 
     def test_case_name(self, case_id: int) -> str | None:
-        case = CasesApi(self._client).get_case(self._code, case_id).result
-        if not case:
+        # The generated TestCase model mis-types isManual/isToBeAutomated as int
+        # while the API returns booleans, so get_case() raises a pydantic
+        # ValidationError. Read the raw response and pull the title ourselves.
+        response = CasesApi(self._client).get_case_without_preload_content(
+            self._code, case_id
+        )
+        body: object = json.loads(response.data)
+        if not isinstance(body, dict):
             return None
-        return getattr(case, "title", None) or getattr(case, "name", None)
+        data: dict[str, object] = {str(k): v for k, v in body.items()}  # type: ignore[misc]  # narrowed dict items are Unknown
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return None
+        title = result.get("title")  # type: ignore[misc]  # narrowed dict value is Unknown
+        return title if isinstance(title, str) else None
 
     def _failures(self, run_id: int) -> list[Failure]:
         results = (

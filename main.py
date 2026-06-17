@@ -1,7 +1,8 @@
+import json
 import logging
 
 from config import load_config
-from qase_runs.get_runs import QaseRuns
+from qase_runs.get_runs import Failure, QaseRuns
 
 
 def main() -> None:
@@ -16,12 +17,11 @@ def main() -> None:
         if result is None:
             print("No runs found")
             return
-        print(result.model_dump_json(indent=2))
-
-        # Typed access to individual failures, e.g. the first failure's comment:
-        if result.failures:
-            first = result.failures[0]
-            print(f"\nFirst failure (case {first.case_id}): {first.comment}")
+        failures: list[Failure] = [
+            Failure(**item) for item in json.loads(result.model_dump_json())["failures"]
+        ]
+        print(failures)
+        # TODO: Attempt to locate a Jira bug for each failure
 
 
 if __name__ == "__main__":

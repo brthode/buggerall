@@ -55,32 +55,38 @@ class TicketProcessor:
         self._label = label
         self._done_category = done_category
 
-    def process(self, summary: str, description: str) -> ProcessResult:
+    def process(
+        self, qase_test_id: str, qase_test_name: str, description: str
+    ) -> ProcessResult:
         """Comment on, skip, or create a ticket for a failing test.
 
-        ``summary`` is matched against existing labelled tickets; ``description``
-        is used only when a brand-new ticket has to be filed.
+        ``qase_test_id`` is matched against existing labelled tickets;
+        ``qase_test_name`` becomes the summary and ``description`` the body of a
+        brand-new ticket when one has to be filed.
         """
-        match = find_existing_ticket(summary, self._client, label=self._label)
+        match = find_existing_ticket(qase_test_id, self._client, label=self._label)
         if match is None:
-            return ProcessResult(Action.CREATED, self._create(summary, description))
+            issue = self._create(qase_test_id, qase_test_name, description)
+            return ProcessResult(Action.CREATED, issue)
         if self._is_open(match):
-            self._client.add_comment(match.key, _still_failing_comment(summary))
+            self._client.add_comment(match.key, _still_failing_comment(qase_test_name))
             return ProcessResult(Action.COMMENTED, match)
         return ProcessResult(Action.SKIPPED_CLOSED, match)
 
     def _is_open(self, issue: JiraIssue) -> bool:
         return (issue.status_category or "").lower() != self._done_category
 
-    def _create(self, summary: str, description: str) -> JiraIssue:
-        issue = self._client.create_issue(summary, description)
+    def _create(
+        self, qase_test_id: str, qase_test_name: str, description: str
+    ) -> JiraIssue:
         # Carry the dedup label so future runs can match this ticket.
-        self._client.update_issue(issue.key, {"labels": [self._label]})
-        return issue
+        return self._client.create_issue(
+            qase_test_name, description, qase_test_id, labels=[self._label]
+        )
 
 
-def _still_failing_comment(summary: str) -> str:
-    return f"This test is still failing in the latest buggerall run: {summary}"
+def _still_failing_comment(qase_test_name: str) -> str:
+    return f"This test is still failing in the latest run: {qase_test_name}"
 
 
 def main() -> None:
@@ -90,12 +96,15 @@ def main() -> None:
     logger = get_logger(__name__)
 
     # Stand-in failure; in the real pipeline this comes from a test result.
-    summary = "Example failing test"
+    qase_test_id = "12345"
+    qase_test_name = "Example failing test"
     description = "Automated bug filed by buggerall for a failing test."
 
     try:
         with JiraClient.from_env() as client:
-            result = TicketProcessor(client).process(summary, description)
+            result = TicketProcessor(client).process(
+                qase_test_id, qase_test_name, description
+            )
     except (JiraError, ValueError) as exc:
         logger.warning("Processing Jira ticket failed: %s", exc)
         return

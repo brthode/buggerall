@@ -18,7 +18,7 @@ LABEL: Final = "buggerall"
 
 
 def find_existing_ticket(
-    summary: str,
+    qase_test_id: str,
     client: JiraClient,
     *,
     label: str = LABEL,
@@ -27,7 +27,7 @@ def find_existing_ticket(
     """Return an existing QT ticket whose summary matches, else None.
 
     Searches the client's project for issues carrying ``label`` and compares
-    each one's summary against ``summary``. The first exact match wins (a ticket
+    each one's qase_test_id. The first exact match wins (a ticket
     title is assumed unique). None means no match — the caller should file the
     new ticket.
     """
@@ -48,18 +48,20 @@ def main() -> None:
     logger = get_logger(__name__)
 
     # A stand-in candidate; in the real pipeline this comes from a test failure.
-    candidate_summary = "Example failing test"
+    candidate_qase_test_id = "12345"
 
     try:
         with JiraClient.from_env() as client:
-            match = find_existing_ticket(candidate_summary, client)
+            match = find_existing_ticket(candidate_qase_test_id, client)
     except (JiraError, ValueError) as exc:
         logger.warning("Jira match failed: %s", exc)
         return
 
     match match:
         case None:
-            logger.info("No existing ticket for %r — file a new one", candidate_summary)
+            logger.info(
+                "No existing ticket for %r — file a new one", candidate_qase_test_id
+            )
         case found:
             logger.info("Existing ticket found: %s (%s)", found.key, found.url)
 

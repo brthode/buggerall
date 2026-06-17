@@ -21,6 +21,10 @@ PROJECT_KEY = "QT"
 API_PATH = "/rest/api/3"
 TIMEOUT = 30
 
+# Jira custom field holding the originating Qase test id. Used to dedup tickets
+# across runs: we store it on create and match on it instead of the summary.
+QASE_TEST_ID_FIELD = "customfield_15307"
+
 
 class JiraIssue(BaseModel):
     key: str
@@ -28,6 +32,7 @@ class JiraIssue(BaseModel):
     status: str | None
     status_category: str | None
     issue_type: str | None
+    qase_test_id: str | None
     url: str | None
 
 
@@ -102,17 +107,20 @@ class JiraClient:
         self,
         summary: str,
         description: str,
+        qase_test_id: str,
         issue_type: str = "Bug",
+        labels: list[str] | None = None,
     ) -> JiraIssue:
-        payload: dict[str, object] = {
-            "fields": {
-                "project": {"key": self._project_key},
-                "summary": summary,
-                "description": _to_adf(description),
-                "issuetype": {"name": issue_type},
-            }
+        fields: dict[str, object] = {
+            "project": {"key": self._project_key},
+            "summary": summary,
+            "description": _to_adf(description),
+            "issuetype": {"name": issue_type},
+            QASE_TEST_ID_FIELD: qase_test_id,
         }
-        data = self._request("POST", "/issue", json=payload)
+        if labels:
+            fields["labels"] = labels
+        data = self._request("POST", "/issue", json={"fields": fields})
         return self.get_issue(str(data["key"]))
 
     def update_issue(self, key: str, fields: dict[str, object]) -> None:
@@ -131,7 +139,7 @@ class JiraClient:
             params={
                 "jql": jql,
                 "maxResults": max_results,
-                "fields": "summary,status,issuetype",
+                "fields": f"summary,status,issuetype,{QASE_TEST_ID_FIELD}",
             },
         )
         issues = data.get("issues")
@@ -152,6 +160,7 @@ class JiraClient:
             status=_opt_str(status.get("name")),
             status_category=_opt_str(category.get("key")),
             issue_type=_opt_str(issue_type.get("name")),
+            qase_test_id=_opt_str(fields.get(QASE_TEST_ID_FIELD)),
             url=f"{self._base_url}/browse/{key}" if key else None,
         )
 

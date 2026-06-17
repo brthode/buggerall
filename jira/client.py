@@ -21,12 +21,18 @@ PROJECT_KEY = "QT"
 API_PATH = "/rest/api/3"
 TIMEOUT = 30
 
+# Jira custom field holding the originating Qase test id. Used to dedup tickets
+# across runs: we store it on create and match on it instead of the summary.
+QASE_TEST_ID_FIELD = "customfield_15307"
+
 
 class JiraIssue(BaseModel):
     key: str
     summary: str | None
     status: str | None
+    status_category: str | None
     issue_type: str | None
+    qase_test_id: str | None
     url: str | None
 
 
@@ -101,21 +107,28 @@ class JiraClient:
         self,
         summary: str,
         description: str,
+        qase_test_id: str,
         issue_type: str = "Bug",
+        labels: list[str] | None = None,
     ) -> JiraIssue:
-        payload: dict[str, object] = {
-            "fields": {
-                "project": {"key": self._project_key},
-                "summary": summary,
-                "description": _to_adf(description),
-                "issuetype": {"name": issue_type},
-            }
+        fields: dict[str, object] = {
+            "project": {"key": self._project_key},
+            "summary": summary,
+            "description": _to_adf(description),
+            "issuetype": {"name": issue_type},
+            QASE_TEST_ID_FIELD: qase_test_id,
         }
-        data = self._request("POST", "/issue", json=payload)
+        if labels:
+            fields["labels"] = labels
+        data = self._request("POST", "/issue", json={"fields": fields})
         return self.get_issue(str(data["key"]))
 
     def update_issue(self, key: str, fields: dict[str, object]) -> None:
         self._request("PUT", f"/issue/{key}", json={"fields": fields})
+
+    def add_comment(self, key: str, body: str) -> None:
+        """Append a plain-text comment to an issue."""
+        self._request("POST", f"/issue/{key}/comment", json={"body": _to_adf(body)})
 
     def search_issues(self, jql: str, max_results: int = 50) -> list[JiraIssue]:
         # The legacy /search endpoint was removed; v3 uses /search/jql, which
@@ -126,7 +139,7 @@ class JiraClient:
             params={
                 "jql": jql,
                 "maxResults": max_results,
-                "fields": "summary,status,issuetype",
+                "fields": f"summary,status,issuetype,{QASE_TEST_ID_FIELD}",
             },
         )
         issues = data.get("issues")
@@ -139,12 +152,15 @@ class JiraClient:
         key = str(data.get("key", ""))
         fields = _as_dict(data.get("fields"))
         status = _as_dict(fields.get("status"))
+        category = _as_dict(status.get("statusCategory"))
         issue_type = _as_dict(fields.get("issuetype"))
         return JiraIssue(
             key=key,
             summary=_opt_str(fields.get("summary")),
             status=_opt_str(status.get("name")),
+            status_category=_opt_str(category.get("key")),
             issue_type=_opt_str(issue_type.get("name")),
+            qase_test_id=_opt_str(fields.get(QASE_TEST_ID_FIELD)),
             url=f"{self._base_url}/browse/{key}" if key else None,
         )
 

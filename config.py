@@ -1,12 +1,13 @@
-import logging
 import os
 import re
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from logging_setup import get_logger
+
 _HTTPS_RE = re.compile(r"^https://[^\s]+$")
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)

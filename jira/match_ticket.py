@@ -35,7 +35,7 @@ def find_existing_ticket(
     jql = f'labels = "{label}" AND project = {client.project_key} ORDER BY created DESC'
     candidates = client.search_issues(jql, max_results=max_results)
     return next(
-        (issue for issue in candidates if issue.summary == summary),
+        (issue for issue in candidates if issue.qase_test_id == qase_test_id),
         # TODO later we will do a fuzzy match for description
         None,
     )

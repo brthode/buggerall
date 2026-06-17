@@ -26,6 +26,7 @@ class JiraIssue(BaseModel):
     key: str
     summary: str | None
     status: str | None
+    status_category: str | None
     issue_type: str | None
     url: str | None
 
@@ -117,6 +118,10 @@ class JiraClient:
     def update_issue(self, key: str, fields: dict[str, object]) -> None:
         self._request("PUT", f"/issue/{key}", json={"fields": fields})
 
+    def add_comment(self, key: str, body: str) -> None:
+        """Append a plain-text comment to an issue."""
+        self._request("POST", f"/issue/{key}/comment", json={"body": _to_adf(body)})
+
     def search_issues(self, jql: str, max_results: int = 50) -> list[JiraIssue]:
         # The legacy /search endpoint was removed; v3 uses /search/jql, which
         # returns an "issues" array plus "isLast"/"nextPageToken" for paging.
@@ -139,11 +144,13 @@ class JiraClient:
         key = str(data.get("key", ""))
         fields = _as_dict(data.get("fields"))
         status = _as_dict(fields.get("status"))
+        category = _as_dict(status.get("statusCategory"))
         issue_type = _as_dict(fields.get("issuetype"))
         return JiraIssue(
             key=key,
             summary=_opt_str(fields.get("summary")),
             status=_opt_str(status.get("name")),
+            status_category=_opt_str(category.get("key")),
             issue_type=_opt_str(issue_type.get("name")),
             url=f"{self._base_url}/browse/{key}" if key else None,
         )

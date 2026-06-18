@@ -1,17 +1,7 @@
-"""Client for the Jira Cloud REST API v3.
-
-Wraps create / get / update / search of issues for the QT project. Auth is
-HTTP Basic with the account email (BUGGERALL_JIRA_API_USER) and an API token
-(BUGGERALL_JIRA_API_KEY); the site base URL is BUGGERALL_JIRA_URL, e.g.
-https://smithrx.atlassian.net
-
-Run with 1Password injecting the credentials:
-
-    op run --env-file=.env -- uv run python main.py
-"""
-
 import os
-from typing import Self
+from dataclasses import dataclass
+from enum import Enum
+from typing import Final, Self
 
 import requests
 from pydantic import BaseModel
@@ -20,10 +10,13 @@ from requests.auth import HTTPBasicAuth
 PROJECT_KEY = "QT"
 API_PATH = "/rest/api/3"
 TIMEOUT = 30
+LABEL: Final = "buggerall"
+DONE_CATEGORY: Final = "done"
 
-# Jira custom field holding the originating Qase test id. Used to dedup tickets
-# across runs: we store it on create and match on it instead of the summary.
+# Custom field storing the originating Qase test id — used to dedup tickets
+# across runs: stored on create and matched on instead of the summary.
 QASE_TEST_ID_FIELD = "customfield_15307"
+QASE_PROJECT = "customfield_15340"
 
 
 class JiraIssue(BaseModel):
@@ -33,11 +26,24 @@ class JiraIssue(BaseModel):
     status_category: str | None
     issue_type: str | None
     qase_test_id: str | None
+    qase_project: str | None
     url: str | None
 
 
 class JiraError(RuntimeError):
     """Raised when the Jira API returns a non-success response."""
+
+
+class Action(Enum):
+    COMMENTED = "commented"
+    SKIPPED_CLOSED = "skipped_closed"
+    CREATED = "created"
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessResult:
+    action: Action
+    issue: JiraIssue
 
 
 class JiraClient:
@@ -103,11 +109,29 @@ class JiraClient:
         data = self._request("GET", f"/issue/{key}")
         return self._to_issue(data)
 
+    def get_issue_type_meta(self, issue_type_name: str = "Bug") -> dict[str, object]:
+        data = self._request("GET", f"/issue/createmeta/{self._project_key}/issuetypes")
+        issue_types = data.get("issueTypes")
+        if not isinstance(issue_types, list):
+            return {}
+        items: list[object] = list(issue_types)  # type: ignore[arg-type]  # narrowed list is Unknown
+        for it in items:
+            it_dict = _as_dict(it)
+            if _opt_str(it_dict.get("name")) == issue_type_name:
+                type_id = _opt_str(it_dict.get("id"))
+                if type_id:
+                    return self._request(
+                        "GET",
+                        f"/issue/createmeta/{self._project_key}/issuetypes/{type_id}",
+                    )
+        return {}
+
     def create_issue(
         self,
         summary: str,
         description: str,
         qase_test_id: str,
+        qase_project: str,
         issue_type: str = "Bug",
         labels: list[str] | None = None,
     ) -> JiraIssue:
@@ -117,6 +141,7 @@ class JiraClient:
             "description": _to_adf(description),
             "issuetype": {"name": issue_type},
             QASE_TEST_ID_FIELD: qase_test_id,
+            QASE_PROJECT: qase_project,
         }
         if labels:
             fields["labels"] = labels
@@ -127,19 +152,16 @@ class JiraClient:
         self._request("PUT", f"/issue/{key}", json={"fields": fields})
 
     def add_comment(self, key: str, body: str) -> None:
-        """Append a plain-text comment to an issue."""
         self._request("POST", f"/issue/{key}/comment", json={"body": _to_adf(body)})
 
     def search_issues(self, jql: str, max_results: int = 50) -> list[JiraIssue]:
-        # The legacy /search endpoint was removed; v3 uses /search/jql, which
-        # returns an "issues" array plus "isLast"/"nextPageToken" for paging.
         data = self._request(
             "GET",
             "/search/jql",
             params={
                 "jql": jql,
                 "maxResults": max_results,
-                "fields": f"summary,status,issuetype,{QASE_TEST_ID_FIELD}",
+                "fields": f"summary,status,issuetype,{QASE_TEST_ID_FIELD},{QASE_PROJECT}",
             },
         )
         issues = data.get("issues")
@@ -147,6 +169,43 @@ class JiraClient:
             return []
         items: list[object] = list(issues)  # type: ignore[arg-type]  # narrowed list is Unknown
         return [self._to_issue(_as_dict(issue)) for issue in items]
+
+    def find_existing_ticket(
+        self,
+        qase_test_id: str,
+        *,
+        label: str = LABEL,
+        max_results: int = 50,
+    ) -> JiraIssue | None:
+        jql = f'labels = "{label}" AND project = {self._project_key} ORDER BY created DESC'
+        candidates = self.search_issues(jql, max_results=max_results)
+        return next(
+            (issue for issue in candidates if issue.qase_test_id == qase_test_id),
+            None,
+        )
+
+    def process_failure(
+        self,
+        qase_test_id: str,
+        qase_test_name: str,
+        description: str,
+        qase_project: str,
+        *,
+        label: str = LABEL,
+        done_category: str = DONE_CATEGORY,
+    ) -> ProcessResult:
+        match = self.find_existing_ticket(qase_test_id, label=label)
+        if match is None:
+            issue = self.create_issue(
+                qase_test_name, description, qase_test_id, qase_project, labels=[label]
+            )
+            return ProcessResult(Action.CREATED, issue)
+        if (match.status_category or "").lower() != done_category:
+            self.add_comment(
+                match.key, f"Still failing in the latest run: {qase_test_name}"
+            )
+            return ProcessResult(Action.COMMENTED, match)
+        return ProcessResult(Action.SKIPPED_CLOSED, match)
 
     def _to_issue(self, data: dict[str, object]) -> JiraIssue:
         key = str(data.get("key", ""))
@@ -161,6 +220,7 @@ class JiraClient:
             status_category=_opt_str(category.get("key")),
             issue_type=_opt_str(issue_type.get("name")),
             qase_test_id=_opt_str(fields.get(QASE_TEST_ID_FIELD)),
+            qase_project=_opt_str(fields.get(QASE_PROJECT)),
             url=f"{self._base_url}/browse/{key}" if key else None,
         )
 
@@ -183,7 +243,6 @@ def _opt_str(value: object) -> str | None:
 
 
 def _to_adf(text: str) -> dict[str, object]:
-    """Wrap plain text in the Atlassian Document Format the v3 API requires."""
     return {
         "type": "doc",
         "version": 1,

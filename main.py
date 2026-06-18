@@ -22,8 +22,10 @@ def main() -> None:
         _logger.info("Found %d failure(s)", len(failures))
         print(failures)
 
-    # TODO: Attempt to locate / create a Jira bug for each failure.
-    # The API token isn't valid yet, so just confirm the client connects.
+
+
+    # TODO: For each failure, use the Jira client to detect existing work items.
+    #
     try:
         with JiraClient.from_env() as jira:
             issues = jira.search_issues(

@@ -7,6 +7,10 @@ import requests
 from pydantic import BaseModel
 from requests.auth import HTTPBasicAuth
 
+from logging_setup import get_logger
+
+_logger = get_logger(__name__)
+
 PROJECT_KEY = "QT"
 API_PATH = "/rest/api/3"
 TIMEOUT = 30
@@ -190,6 +194,7 @@ class JiraClient:
         qase_test_name: str,
         description: str,
         qase_project: str,
+        qase_run_id: int,
         *,
         label: str = LABEL,
         done_category: str = DONE_CATEGORY,
@@ -199,12 +204,23 @@ class JiraClient:
             issue = self.create_issue(
                 qase_test_name, description, qase_test_id, qase_project, labels=[label]
             )
+            _logger.info(
+                "Created %s for case %s: %s", issue.key, qase_test_id, issue.url
+            )
             return ProcessResult(Action.CREATED, issue)
         if (match.status_category or "").lower() != done_category:
             self.add_comment(
-                match.key, f"Still failing in the latest run: {qase_test_name}"
+                match.key,
+                f"Still failing in Qase run #{qase_run_id}: {qase_test_name}",
+            )
+            _logger.info(
+                "Commented on %s (%s) for case %s",
+                match.key,
+                match.status,
+                qase_test_id,
             )
             return ProcessResult(Action.COMMENTED, match)
+        _logger.info("Skipped closed ticket %s for case %s", match.key, qase_test_id)
         return ProcessResult(Action.SKIPPED_CLOSED, match)
 
     def _to_issue(self, data: dict[str, object]) -> JiraIssue:

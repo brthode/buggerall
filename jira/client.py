@@ -200,15 +200,9 @@ class JiraClient:
         done_category: str = DONE_CATEGORY,
     ) -> ProcessResult:
         match = self.find_existing_ticket(qase_test_id, label=label)
-        if match is None:
-            issue = self.create_issue(
-                qase_test_name, description, qase_test_id, qase_project, labels=[label]
-            )
-            _logger.info(
-                "Created %s for case %s: %s", issue.key, qase_test_id, issue.url
-            )
-            return ProcessResult(Action.CREATED, issue)
-        if (match.status_category or "").lower() != done_category:
+
+        # An open ticket already tracks this failure — just comment on it.
+        if match is not None and (match.status_category or "").lower() != done_category:
             self.add_comment(
                 match.key,
                 f"Still failing in Qase run #{qase_run_id}: {qase_test_name}",
@@ -220,8 +214,21 @@ class JiraClient:
                 qase_test_id,
             )
             return ProcessResult(Action.COMMENTED, match)
-        _logger.info("Skipped closed ticket %s for case %s", match.key, qase_test_id)
-        return ProcessResult(Action.SKIPPED_CLOSED, match)
+
+        # No ticket, or the most recent one is closed (the failure regressed):
+        # open a fresh bug.
+        if match is not None:
+            _logger.info(
+                "Existing ticket %s for case %s is closed (%s); opening a new bug",
+                match.key,
+                qase_test_id,
+                match.status,
+            )
+        issue = self.create_issue(
+            qase_test_name, description, qase_test_id, qase_project, labels=[label]
+        )
+        _logger.info("Created %s for case %s: %s", issue.key, qase_test_id, issue.url)
+        return ProcessResult(Action.CREATED, issue)
 
     def _to_issue(self, data: dict[str, object]) -> JiraIssue:
         key = str(data.get("key", ""))

@@ -1,3 +1,4 @@
+import argparse
 import json
 
 from config import load_config
@@ -8,10 +9,11 @@ from qase_runs.get_runs import PROJECT_CODE, Failure, QaseRuns, RunFailures
 _logger = get_logger(__name__)
 
 
-def main() -> None:
+def main(qase_project: str = PROJECT_CODE) -> None:
     load_config()
+    _logger.info("Using Qase project %s", qase_project)
 
-    with QaseRuns.from_env() as qase:
+    with QaseRuns.from_env(qase_project) as qase:
         result = qase.latest_run_failures()
         if result is None:
             _logger.info("No runs found")
@@ -39,7 +41,7 @@ def main() -> None:
             _logger.info(
                 "Processing case %s (qase project %s): %r",
                 qase_test_id,
-                PROJECT_CODE,
+                qase_project,
                 summary,
             )
 
@@ -48,7 +50,7 @@ def main() -> None:
                     qase_test_id=qase_test_id,
                     qase_test_name=summary,
                     description=description,
-                    qase_project=PROJECT_CODE,
+                    qase_project=qase_project,
                     qase_run_id=result.run_id or 0,
                 )
             except JiraError as exc:
@@ -81,4 +83,11 @@ def bug_description(failure: Failure, run: RunFailures) -> str:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="File Jira bugs from Qase failures")
+    parser.add_argument(
+        "--qase-project",
+        default=PROJECT_CODE,
+        help=f"Qase project code to read the latest run from (default: {PROJECT_CODE})",
+    )
+    args = parser.parse_args()
+    main(qase_project=args.qase_project)

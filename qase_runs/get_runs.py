@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from qase.api_client_v1 import ApiClient, CasesApi, Configuration, ResultsApi, RunsApi
 
 if TYPE_CHECKING:
+    from qase.api_client_v1.models.result import Result
     from qase.api_client_v1.models.run import Run
 
 PROJECT_CODE = "PRAT"
@@ -85,30 +86,39 @@ class QaseRuns:
         return title if isinstance(title, str) else None
 
     def _failures(self, run_id: int) -> list[Failure]:
+        # A case may be retried within a run, producing several result rows
+        # (e.g. failed then passed). Filtering by status="failed" would pick up
+        # those stale rows, so fetch everything and keep only each case's final
+        # result, then drop the ones that didn't end in failure.
         results = (
             ResultsApi(self._client)
-            .get_results(self._code, run=str(run_id), status="failed", limit=100)
+            .get_results(self._code, run=str(run_id), limit=100)
             .result
         )
         entities = results.entities if results else None
         if not entities:
             return []
 
-        failures: list[Failure] = []
+        # API returns results oldest-first, so the last row for each case is its
+        # final outcome within the run; a later "passed" overwrites an earlier
+        # "failed" from a retry.
+        latest: dict[int, Result] = {}
         for result in entities:
-            case_id = result.case_id
-            case_name = self.test_case_name(case_id) if case_id is not None else None
-            failures.append(
-                Failure(
-                    case_id=case_id,
-                    case_name=case_name,
-                    status=result.status,
-                    comment=result.comment,
-                    stacktrace=result.stacktrace,
-                    time_spent_ms=result.time_spent_ms,
-                )
+            if result.case_id is not None:
+                latest[result.case_id] = result
+
+        return [
+            Failure(
+                case_id=case_id,
+                case_name=self.test_case_name(case_id),
+                status=result.status,
+                comment=result.comment,
+                stacktrace=result.stacktrace,
+                time_spent_ms=result.time_spent_ms,
             )
-        return failures
+            for case_id, result in latest.items()
+            if result.status == "failed"
+        ]
 
     def latest_run_failures(self) -> RunFailures | None:
         run = self.latest_run()
